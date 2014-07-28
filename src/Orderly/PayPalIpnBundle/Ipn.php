@@ -286,7 +286,7 @@ class Ipn
                 $this->orderStatus = self::REFUNDED;
                 break;
             default:
-                $this->_logTransaction('IPN', 'ERROR', 'Payment status of ' . $this->ipnData['payment_status'] . ' is not recognised', $ipnResponse);
+                $this->_logTransaction('IPN', 'ERROR', 'Payment status of ' . $paymentStatus . ' is not recognised', $ipnResponse);
 
                 return FALSE;
         }
