@@ -301,20 +301,22 @@ class Ipn
      */
     public function extractOrder()
     {
+        $data = $this->ipnData;
+
         // Look for "initial payment" fields and use these if set (for recurring payments)
-        foreach ($this->ipnData as $key => $value) {
+        foreach ($data as $key => $value) {
             if (array_key_exists($key, $this->recurringPaymentFieldMapping)) {
                 $newKey = $this->recurringPaymentFieldMapping[$key];
 
-                if (!isset($this->ipnData[$newKey])) {
-                    $this->ipnData[$newKey] = $value;
+                if (!isset($data[$newKey])) {
+                    $data[$newKey] = $value;
                 }
             }
         }
 
         $this->order = new $this->clsIpnOrders;
         // First extract the actual order record itself
-        foreach ($this->ipnData as $key=>$value) {
+        foreach ($data as $key=>$value) {
             // This is very simple: the order fields are any fields which do not end in a number
             // (because those fields belong to the order items)
             // period, amount, mcAmount ends with number and belongs to order. Think condition line should be commented
@@ -351,26 +353,26 @@ class Ipn
             $suffixUnderscore = $hasCart ? '_' . $suffix : $suffix;
 
             $this->orderItems[$i] = new $this->clsIpnOrderItems;
-            if(isset($this->ipnData['item_name' . $suffix]))
-                $this->orderItems[$i]->setItemName($this->ipnData['item_name' . $suffix]);
-            if(isset($this->ipnData['item_number' . $suffix]))
-                $this->orderItems[$i]->setItemNumber($this->ipnData['item_number' . $suffix]);
-            if(isset($this->ipnData['quantity' . $suffix]))
-                $this->orderItems[$i]->setQuantity($this->ipnData['quantity' . $suffix]);
-            if(isset($this->ipnData['mc_gross' . $suffixUnderscore]))
-                $this->orderItems[$i]->setMcGross($this->ipnData['mc_gross' . $suffixUnderscore]);
-            if(isset($this->ipnData['mc_gross' . $suffixUnderscore]) && isset($this->ipnData['quantity' . $suffix]))
-                $this->orderItems[$i]->setCostPerItem(floatval($this->ipnData['mc_gross' . $suffixUnderscore]) / intval($this->ipnData['quantity' . $suffix])); // Should be fine because quantity can never be 0
+            if(isset($data['item_name' . $suffix]))
+                $this->orderItems[$i]->setItemName($data['item_name' . $suffix]);
+            if(isset($data['item_number' . $suffix]))
+                $this->orderItems[$i]->setItemNumber($data['item_number' . $suffix]);
+            if(isset($data['quantity' . $suffix]))
+                $this->orderItems[$i]->setQuantity($data['quantity' . $suffix]);
+            if(isset($data['mc_gross' . $suffixUnderscore]))
+                $this->orderItems[$i]->setMcGross($data['mc_gross' . $suffixUnderscore]);
+            if(isset($data['mc_gross' . $suffixUnderscore]) && isset($data['quantity' . $suffix]))
+                $this->orderItems[$i]->setCostPerItem(floatval($data['mc_gross' . $suffixUnderscore]) / intval($data['quantity' . $suffix])); // Should be fine because quantity can never be 0
 
             // Update the total before the discount was applied
             $totalBeforeDiscount +=  $this->orderItems[$i]->getMcGross();
 
-            if(isset($this->ipnData['mc_handling' . $suffix]))
-                $this->orderItems[$i]->setMcHandling($this->ipnData['mc_handling' . $suffix]);
-            if(isset($this->ipnData['mc_shipping' . $suffix]))
-                $this->orderItems[$i]->setMcShipping($this->ipnData['mc_shipping' . $suffix]);
-            if(isset($this->ipnData['tax' . $suffix]))
-                $this->orderItems[$i]->setTax($this->ipnData['tax' . $suffix]); // Tax is not always set on an item
+            if(isset($data['mc_handling' . $suffix]))
+                $this->orderItems[$i]->setMcHandling($data['mc_handling' . $suffix]);
+            if(isset($data['mc_shipping' . $suffix]))
+                $this->orderItems[$i]->setMcShipping($data['mc_shipping' . $suffix]);
+            if(isset($data['tax' . $suffix]))
+                $this->orderItems[$i]->setTax($data['tax' . $suffix]); // Tax is not always set on an item
 
 
             // Set the order item options if any
@@ -378,13 +380,13 @@ class Ipn
             // Reference: https://cms.paypal.com/us/cgi-bin/?cmd=_render-content&content_ID=developer/e_howto_html_Appx_websitestandard_htmlvariables
             for ($ii = 1, $count = 7; $ii < $count; $ii++)
             {
-                if(isset($this->ipnData['option_name'.$ii.$suffixUnderscore])) {
+                if(isset($data['option_name'.$ii.$suffixUnderscore])) {
                     $method = 'setOptionName' . $ii;
-                    $this->orderItems[$i]->$method($this->ipnData['option_name'.$ii.$suffixUnderscore]);
+                    $this->orderItems[$i]->$method($data['option_name'.$ii.$suffixUnderscore]);
                 }
-                if(isset($this->ipnData['option_selection'.$ii.$suffixUnderscore])) {
+                if(isset($data['option_selection'.$ii.$suffixUnderscore])) {
                     $method = 'setOptionSelection' . $ii;
-                    $this->orderItems[$i]->$method($this->ipnData['option_selection'.$ii.$suffixUnderscore]);
+                    $this->orderItems[$i]->$method($data['option_selection'.$ii.$suffixUnderscore]);
                 }
             }
 
@@ -633,5 +635,15 @@ class Ipn
     public function getOrderItems()
     {
         return $this->orderItems;
+    }
+
+    /**
+     * Get the raw IPN data as an array.
+     *
+     * @return array
+     */
+    public function getData()
+    {
+        return $this->ipnData;
     }
 }
