@@ -64,6 +64,7 @@ class Ipn
     private $_sc; // Symfony container
 
     private $ipnData = array(); // Contains the POST values for IPN
+    private $ipnDataExpanded = array(); // Contains the POST values for IPN with some spoofed for recurring payments (ugh)
     private $order = null; // Contains the fields pertaining to an order
     private $orderItems = array(); // Contains the order items within an order
     private $orderStatus = self::NOTPAID; // All-important variable: whether the order has been paid for yet or not
@@ -87,6 +88,7 @@ class Ipn
         'initial_payment_status' => 'payment_status',
         'initial_payment_amount' => 'auth_amount',
         'initial_payment_txn_id' => 'txn_id',
+        'time_created'           => 'payment_date',
     ];
 
     // Payment status constants we use, more user-friendly than the PayPal ones
@@ -186,12 +188,25 @@ class Ipn
             }
 
             // Let's also store this in this class, turning empty strings back to null to avoid breaking Doctrine later
-            $this->ipnData[$field] = ($ipnDataRaw[$field] == '') ? null : $ipnDataRaw[$field];
+            $this->ipnDataExpanded[$field] = ($ipnDataRaw[$field] == '') ? null : $ipnDataRaw[$field];
+        }
+
+        $this->ipnDataExpandedExpanded = $this->ipnDataExpanded;
+
+        // Look for "initial payment" fields and use these if set (for recurring payments)
+        foreach ($this->ipnDataExpandedExpanded as $key => $value) {
+            if (array_key_exists($key, $this->recurringPaymentFieldMapping)) {
+                $newKey = $this->recurringPaymentFieldMapping[$key];
+
+                if (!isset($this->ipnDataExpandedExpanded[$newKey])) {
+                    $this->ipnDataExpandedExpanded[$newKey] = $value;
+                }
+            }
         }
 
         // Let's now set the transaction type and transaction ID, we'll use these for logging.
-        $this->transactionID = (isset($this->ipnData['txn_id']) ? $this->ipnData['txn_id'] : null);
-        $this->transactionType = (isset($this->ipnData['txn_type']) ? $this->ipnData['txn_type'] : null);
+        $this->transactionID = (isset($this->ipnDataExpanded['txn_id']) ? $this->ipnDataExpanded['txn_id'] : null);
+        $this->transactionType = (isset($this->ipnDataExpanded['txn_type']) ? $this->ipnDataExpanded['txn_type'] : null);
 
         // Now we need to check that we haven't received this message from PayPal before.
         // Luckily we store an md5 hash of each IPN dataset so we can cross-check whether this one is new.
@@ -221,40 +236,32 @@ class Ipn
 
         // The IPN transaction is a genuine one - now we need to validate its contents.
         // First we check that the receiver email matches our email address.
-        if ($this->ipnData['receiver_email'] != $this->merchantEmail) {
-            $this->_logTransaction('IPN', 'ERROR', 'Receiver email ' . $this->ipnData['receiver_email'] . ' does not match merchant\'s email "'.$this->merchantEmail.'"', $ipnResponse);
+        if ($this->ipnDataExpanded['receiver_email'] != $this->merchantEmail) {
+            $this->_logTransaction('IPN', 'ERROR', 'Receiver email ' . $this->ipnDataExpanded['receiver_email'] . ' does not match merchant\'s email "'.$this->merchantEmail.'"', $ipnResponse);
 
             return FALSE;
         }
 
         // Now we check that PayPal and this listener agree on whether this is a test or not
-        $testIPN = (isset($this->ipnData['test_ipn']) && $this->ipnData['test_ipn'] == 1);
+        $testIPN = (isset($this->ipnDataExpanded['test_ipn']) && $this->ipnDataExpanded['test_ipn'] == 1);
         if ($testIPN == $this->isLive) {
-            $this->_logTransaction('IPN', 'ERROR', 'Listener\'s environment does not match test_ipn flag ' . $this->ipnData['test_ipn'], $ipnResponse);
+            $this->_logTransaction('IPN', 'ERROR', 'Listener\'s environment does not match test_ipn flag ' . $this->ipnDataExpanded['test_ipn'], $ipnResponse);
 
             return FALSE;
         }
 
         // Check if IPN is an subscription signup notification
         // because subscription signups don't have a payment_status
-        if (isset($this->ipnData['txn_type']) && $this->ipnData['txn_type'] == 'subscr_signup'){
+        if (isset($this->ipnDataExpanded['txn_type']) && $this->ipnDataExpanded['txn_type'] == 'subscr_signup'){
             $this->_logTransaction('IPN', 'SUCCESS', 'Subscription has been created', $ipnResponse);
             return true;
         }
 
         // Check if paypal submits information regarding a case
         // because cases don't have a payment_status
-        if ((isset($this->ipnData['txn_type']) && ($this->ipnData['txn_type'] == 'new_case' || $this->ipnData['txn_type'] == 'adjustment')) || isset($this->ipnData['case_type']) && $this->ipnData['case_type'] == 'chargeback') {
+        if ((isset($this->ipnDataExpanded['txn_type']) && ($this->ipnDataExpanded['txn_type'] == 'new_case' || $this->ipnDataExpanded['txn_type'] == 'adjustment')) || isset($this->ipnDataExpanded['case_type']) && $this->ipnDataExpanded['case_type'] == 'chargeback') {
             $this->_logTransaction('IPN', 'SUCCESS', 'Case Information logged for transaction', $ipnResponse);
             return true;
-        }
-
-        $paymentStatus = isset($this->ipnData['payment_status']) ? $this->ipnData['payment_status'] : null;
-
-        if ('recurring_payment_profile_created' === $this->ipnData['txn_type']
-         && null === $paymentStatus
-         && isset($this->ipnData['initial_payment_status'])) {
-            $paymentStatus = $this->ipnData['initial_payment_status'];
         }
 
         // The final check is of the payment status. We need to surface this
@@ -269,7 +276,7 @@ class Ipn
         // statuses: http://www.coderprofile.com/networks/discussion-forum/1305/paypal-help-ipn-payment_status
         //
         // We throw an error if the payment_status code is unrecognised.
-        switch ($paymentStatus) {
+        switch ($this->ipnDataExpanded['payment_status']) {
             case "Completed": // Order has been paid for
                 $this->orderStatus = self::PAID;
                 break;
@@ -286,7 +293,7 @@ class Ipn
                 $this->orderStatus = self::REFUNDED;
                 break;
             default:
-                $this->_logTransaction('IPN', 'ERROR', 'Payment status of ' . $paymentStatus . ' is not recognised', $ipnResponse);
+                $this->_logTransaction('IPN', 'ERROR', 'Payment status of ' . $this->ipnDataExpanded['payment_status'] . ' is not recognised', $ipnResponse);
 
                 return FALSE;
         }
@@ -301,22 +308,9 @@ class Ipn
      */
     public function extractOrder()
     {
-        $data = $this->ipnData;
-
-        // Look for "initial payment" fields and use these if set (for recurring payments)
-        foreach ($data as $key => $value) {
-            if (array_key_exists($key, $this->recurringPaymentFieldMapping)) {
-                $newKey = $this->recurringPaymentFieldMapping[$key];
-
-                if (!isset($data[$newKey])) {
-                    $data[$newKey] = $value;
-                }
-            }
-        }
-
         $this->order = new $this->clsIpnOrders;
         // First extract the actual order record itself
-        foreach ($data as $key=>$value) {
+        foreach ($this->ipnDataExpanded as $key=>$value) {
             // This is very simple: the order fields are any fields which do not end in a number
             // (because those fields belong to the order items)
             // period, amount, mcAmount ends with number and belongs to order. Think condition line should be commented
@@ -353,26 +347,26 @@ class Ipn
             $suffixUnderscore = $hasCart ? '_' . $suffix : $suffix;
 
             $this->orderItems[$i] = new $this->clsIpnOrderItems;
-            if(isset($data['item_name' . $suffix]))
-                $this->orderItems[$i]->setItemName($data['item_name' . $suffix]);
-            if(isset($data['item_number' . $suffix]))
-                $this->orderItems[$i]->setItemNumber($data['item_number' . $suffix]);
-            if(isset($data['quantity' . $suffix]))
-                $this->orderItems[$i]->setQuantity($data['quantity' . $suffix]);
-            if(isset($data['mc_gross' . $suffixUnderscore]))
-                $this->orderItems[$i]->setMcGross($data['mc_gross' . $suffixUnderscore]);
-            if(isset($data['mc_gross' . $suffixUnderscore]) && isset($data['quantity' . $suffix]))
-                $this->orderItems[$i]->setCostPerItem(floatval($data['mc_gross' . $suffixUnderscore]) / intval($data['quantity' . $suffix])); // Should be fine because quantity can never be 0
+            if(isset($this->ipnDataExpanded['item_name' . $suffix]))
+                $this->orderItems[$i]->setItemName($this->ipnDataExpanded['item_name' . $suffix]);
+            if(isset($this->ipnDataExpanded['item_number' . $suffix]))
+                $this->orderItems[$i]->setItemNumber($this->ipnDataExpanded['item_number' . $suffix]);
+            if(isset($this->ipnDataExpanded['quantity' . $suffix]))
+                $this->orderItems[$i]->setQuantity($this->ipnDataExpanded['quantity' . $suffix]);
+            if(isset($this->ipnDataExpanded['mc_gross' . $suffixUnderscore]))
+                $this->orderItems[$i]->setMcGross($this->ipnDataExpanded['mc_gross' . $suffixUnderscore]);
+            if(isset($this->ipnDataExpanded['mc_gross' . $suffixUnderscore]) && isset($this->ipnDataExpanded['quantity' . $suffix]))
+                $this->orderItems[$i]->setCostPerItem(floatval($this->ipnDataExpanded['mc_gross' . $suffixUnderscore]) / intval($this->ipnDataExpanded['quantity' . $suffix])); // Should be fine because quantity can never be 0
 
             // Update the total before the discount was applied
             $totalBeforeDiscount +=  $this->orderItems[$i]->getMcGross();
 
-            if(isset($data['mc_handling' . $suffix]))
-                $this->orderItems[$i]->setMcHandling($data['mc_handling' . $suffix]);
-            if(isset($data['mc_shipping' . $suffix]))
-                $this->orderItems[$i]->setMcShipping($data['mc_shipping' . $suffix]);
-            if(isset($data['tax' . $suffix]))
-                $this->orderItems[$i]->setTax($data['tax' . $suffix]); // Tax is not always set on an item
+            if(isset($this->ipnDataExpanded['mc_handling' . $suffix]))
+                $this->orderItems[$i]->setMcHandling($this->ipnDataExpanded['mc_handling' . $suffix]);
+            if(isset($this->ipnDataExpanded['mc_shipping' . $suffix]))
+                $this->orderItems[$i]->setMcShipping($this->ipnDataExpanded['mc_shipping' . $suffix]);
+            if(isset($this->ipnDataExpanded['tax' . $suffix]))
+                $this->orderItems[$i]->setTax($this->ipnDataExpanded['tax' . $suffix]); // Tax is not always set on an item
 
 
             // Set the order item options if any
@@ -380,13 +374,13 @@ class Ipn
             // Reference: https://cms.paypal.com/us/cgi-bin/?cmd=_render-content&content_ID=developer/e_howto_html_Appx_websitestandard_htmlvariables
             for ($ii = 1, $count = 7; $ii < $count; $ii++)
             {
-                if(isset($data['option_name'.$ii.$suffixUnderscore])) {
+                if(isset($this->ipnDataExpanded['option_name'.$ii.$suffixUnderscore])) {
                     $method = 'setOptionName' . $ii;
-                    $this->orderItems[$i]->$method($data['option_name'.$ii.$suffixUnderscore]);
+                    $this->orderItems[$i]->$method($this->ipnDataExpanded['option_name'.$ii.$suffixUnderscore]);
                 }
-                if(isset($data['option_selection'.$ii.$suffixUnderscore])) {
+                if(isset($this->ipnDataExpanded['option_selection'.$ii.$suffixUnderscore])) {
                     $method = 'setOptionSelection' . $ii;
-                    $this->orderItems[$i]->$method($data['option_selection'.$ii.$suffixUnderscore]);
+                    $this->orderItems[$i]->$method($this->ipnDataExpanded['option_selection'.$ii.$suffixUnderscore]);
                 }
             }
 
@@ -520,10 +514,10 @@ class Ipn
     {
         $om = $this->objectManager;
 
-        $txnId = isset($this->ipnData['txn_id']) ? $this->ipnData['txn_id'] : null;
+        $txnId = isset($this->ipnDataExpanded['txn_id']) ? $this->ipnDataExpanded['txn_id'] : null;
 
-        if (null === $txnId && isset($this->ipnData['initial_payment_txn_id'])) {
-            $txnId = $this->ipnData['initial_payment_txn_id'];
+        if (null === $txnId && isset($this->ipnDataExpanded['initial_payment_txn_id'])) {
+            $txnId = $this->ipnDataExpanded['initial_payment_txn_id'];
         }
 
         // First check if the order needs an insert or an update
@@ -579,7 +573,7 @@ class Ipn
         $ipnLog->setTransactionId($this->transactionID);
         $ipnLog->setStatus($transactionStatus);
         $ipnLog->setMessage($transactionMessage);
-        $ipnLog->setIpnDataHash(md5(serialize($this->ipnData)));
+        $ipnLog->setIpnDataHash(md5(serialize($this->ipnDataExpanded)));
 
         if(!$ipnLog->getCreatedAt())
             $ipnLog->setCreatedAt(new \DateTime());
@@ -588,7 +582,7 @@ class Ipn
         // We also log the ipnResponse and the ipnData if we have an error and/or are in the sandbox (test) environment.
         if ($transactionStatus == 'ERROR' || !$this->isLive) {
             $detailJSON = array();
-            $detailJSON['ipn_data'] = $this->ipnData;
+            $detailJSON['ipn_data'] = $this->ipnDataExpanded;
             $detailJSON['ipn_response'] = $ipnResponse;
             $ipnLog->setDetail(json_encode($detailJSON));
         } else {
@@ -644,6 +638,6 @@ class Ipn
      */
     public function getData()
     {
-        return $this->ipnData;
+        return $this->ipnDataExpanded;
     }
 }
