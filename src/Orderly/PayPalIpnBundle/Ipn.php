@@ -188,18 +188,18 @@ class Ipn
             }
 
             // Let's also store this in this class, turning empty strings back to null to avoid breaking Doctrine later
-            $this->ipnDataExpanded[$field] = ($ipnDataRaw[$field] == '') ? null : $ipnDataRaw[$field];
+            $this->ipnData[$field] = ($ipnDataRaw[$field] == '') ? null : $ipnDataRaw[$field];
         }
 
-        $this->ipnDataExpandedExpanded = $this->ipnDataExpanded;
+        $this->ipnDataExpanded = $this->ipnData;
 
         // Look for "initial payment" fields and use these if set (for recurring payments)
-        foreach ($this->ipnDataExpandedExpanded as $key => $value) {
+        foreach ($this->ipnDataExpanded as $key => $value) {
             if (array_key_exists($key, $this->recurringPaymentFieldMapping)) {
                 $newKey = $this->recurringPaymentFieldMapping[$key];
 
-                if (!isset($this->ipnDataExpandedExpanded[$newKey])) {
-                    $this->ipnDataExpandedExpanded[$newKey] = $value;
+                if (!isset($this->ipnDataExpanded[$newKey])) {
+                    $this->ipnDataExpanded[$newKey] = $value;
                 }
             }
         }
