@@ -264,6 +264,11 @@ class Ipn
             return true;
         }
 
+        if (!isset($this->ipnDataExpanded['payment_status']) && $this->ipnDataExpanded['txn_type'] === 'recurring_payment_failed') {
+            $this->_logTransaction('IPN', 'SUCCESS', 'Recurring payment failed', $ipnResponse);
+            return true;
+        }
+
         // The final check is of the payment status. We need to surface this
         // as a class variable so that the calling code can decide how to respond.
         //
